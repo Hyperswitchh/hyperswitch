@@ -41,7 +41,7 @@ What this means:
 |---|---|---|
 | 1 | `boot_all` focus hook failure killed the daemon at startup | Fixed: logged as a warning. Test added |
 | 2 | Hook failure left input and screen on different guests | Fixed: input is moved back and focus restored. Test added |
-| 3 | Hotkey batch leaked to the old guest and key-ups reached the new one | Fixed: combo batch dropped, `KeySuppressor` drops matching key-ups and repeats. Tests added. Mouse buttons are now released too |
+| 3 | Hotkey batch leaked to the old guest and key-ups reached the new one | Fixed: the batch that completes the combo is dropped. Mouse buttons are now released too. Verified by the Phase 4 hardware test |
 | 4 | Switching to a stopped VM returns before it has booted | Reworked, no code change: libvirt reports `Running` as soon as QEMU starts, so the guest OS boot cannot be detected from the hypervisor. A switch to a cold guest still moves focus so the user sees it boot, and the report flags `cold_start` |
 | 5 | `DisplayMode` was unused and hooks hardcoded `lg-{id}` | Fixed: `{window}` and `{monitor_input}` placeholders come from `DisplayMode`. SPICE guests now match by title. Tests added |
 | 6 | `mirror()` copied only keys and relative axes | Fixed: absolute axes are copied. LEDs are not supported by the uinput builder in evdev 0.12, so they stay unmirrored |
@@ -56,42 +56,55 @@ Result: 18 tests pass (8 more than baseline), clippy clean with and without the 
 
 Not verified: the `libvirt` feature (needs `libvirt-dev`) and the real evdev router on a device. Both are Phase 3 and 4.
 
-## Phase 2: Install virtualization on this laptop
+## Phase 2: Install virtualization on this laptop (done)
 
-Needs approval before any `apt install` or group change.
+- Installed (70 packages, 60 MB): libvirt 12.0.0, virt-manager 5.1.0, swtpm 0.10.1, libvirt-dev, virtiofsd. QEMU 10.2.1 and OVMF were already present.
+- `libvirtd`, its socket and `virtlogd` are active. The `default` NAT network is active and set to autostart.
+- User added to the `kvm` and `libvirt` groups. The current login session does not have them until the next login. Until then run commands as `sg libvirt -c "<command>"`.
+- Gate passed: `virsh -c qemu:///system list --all` runs and lists no guests. `/dev/kvm` is readable and writable with the kvm group.
+- Disk: still 52 GB free.
+- CI already built the `libvirt` and `evdev` features against real libvirt, so the `virt` 0.4 calls compile as written. Runtime behavior is still untested.
+- Watch for: Docker and libvirt both edit firewall rules, so guest networking can conflict.
 
-Work:
-- Check free space: `df -h /`. Plan for at least 80 GB free for two guests.
-- Install `libvirt-daemon-system libvirt-clients virt-manager ovmf swtpm libvirt-dev`.
-- Add the user to `kvm` and `libvirt` groups, then log out and in.
-- Confirm `virsh list --all` works.
+## Phase 3: Real backend with a light guest (done)
 
-Gate: `virsh -c qemu:///system list --all` runs without error.
+Setup: two Alpine 3.24.2 live guests (`hs-test1`, `hs-test2`, 512 MB each, SPICE, no disk) under `qemu:///session`. ISO in `~/hyperswitch-vms/`, sha256 verified. Daemon built with `--features hs-daemon/libvirt` and run with `--libvirt-uri qemu:///session`. `qemu:///system` is not tested yet.
 
-## Phase 3: Real backend with a light guest
+| Check | Result |
+|---|---|
+| `status`, `next`, `prev`, `switch`, `start`, `stop` | All work against real libvirt |
+| Switch between two running guests | 0.2 to 1.3 ms (no display or audio hooks yet) |
+| Paused target (`virsh suspend`) | Reported as Paused, resumed on switch |
+| Destroyed target | Reported as ShutOff, cold started on switch in 125 ms, flagged as cold boot |
+| Unknown id | Clear error |
+| SIGTERM | Clean exit, guests keep running |
 
-Use a small Linux guest first. It boots in seconds and uses 2 GB, so it tests the daemon without Windows complexity.
+Findings:
+- `start` on a running guest returns a raw libvirt error. Making it idempotent would be friendlier.
+- libvirt prints its own error line to stderr (`libvirt: QEMU Driver error`). Registering a silent error callback would remove the noise.
+- `stop` sent ACPI shutdown but the Alpine live ISO has no `acpid`, so it kept running. That is guest behavior, not a daemon bug.
+- Item 7 (mutex held across slow calls) matters less than expected: libvirt `shutdown` returns immediately. Revisit only if a measured stall appears.
 
-Work:
-- Create guest `hs-test1` (Alpine or Ubuntu Server, 2 GB RAM, virtio, SPICE).
-- Build `cargo build -p hs-daemon --features libvirt`. Fix any `virt` 0.4 API errors.
-- Run `hyperswitchd` with a test config pointing at `hs-test1` and `hs-test2`.
-- Exercise `status`, `start`, `stop`, `switch`, `next`.
+Gate passed. The two guests are left running for Phase 4.
 
-Gate: all six CLI commands work against real libvirt guests. Pause and resume states report correctly.
+## Phase 4: Real input routing (router verified, QEMU wiring and real keyboard pending)
 
-## Phase 4: Real input routing
+Safety setup: a test-only udev rule (`/etc/udev/rules.d/71-hyperswitch-test.rules`) gives the user access to `/dev/uinput` and to devices named `hs-fake-*` or `hyperswitch-*`, and sets `LIBINPUT_IGNORE_DEVICE` so the GNOME desktop never types them. Remove it when Phase 4 is finished: `sudo rm /etc/udev/rules.d/71-hyperswitch-test.rules && sudo udevadm control --reload`.
 
-Work:
-- Build with `--features host`. Run the daemon as root, or grant `uinput` and `input` group access.
-- Point `input_devices` at this laptop's keyboard and mouse under `/dev/input/by-id/`. Keep a second terminal or SSH session open in case input is lost.
-- Check that udev creates `/dev/input/hyperswitch/...` and that QEMU `<input type="evdev">` accepts them.
-- Test the hotkeys: next, prev, direct jump.
-- Check for stuck modifiers and leaked key events (Phase 1 item 3).
+Hardware test: `crates/hs-core/tests/uinput_router.rs` (ignored by default).
+Run: `cargo test -p hs-core --features evdev --test uinput_router -- --ignored`
 
-Safety: test first with a throwaway virtual device on `/dev/uinput`, not the real keyboard. Add a watchdog that releases the grab after N seconds during testing.
+What it does: fake keyboard via uinput, real `EvdevRouter` with two virtual guest devices, 100 switch cycles. Each cycle checks that a plain key reaches only the active guest, that the hotkey fires, and that the physical releases afterward do not reach the new guest. At the end no key may be stuck down.
 
-Gate: typing goes only to the focused guest. No stuck keys over 100 switches.
+Results:
+- Passes with the fixes (100 cycles, about 6 s).
+- Fails when the original behavior is restored: Ctrl, Alt and Right stay down on the old guest and the releases leak to the new one. So the test does detect the bug.
+- Correction to the Phase 1 notes: the Linux input layer already drops a key-up (and repeat) for a key that is not down on a virtual device, so an earlier `KeySuppressor` was redundant. It was removed and the test still passes. The fix that matters is dropping the batch that completes the combo.
+- Finding: the distro rule `70-hyperswitch.rules` should also set `LIBINPUT_IGNORE_DEVICE` for `hyperswitch-*` devices.
+
+Still to do for this phase:
+- Wire the guests to the virtual devices with libvirt `<input type="evdev">`, using the udev symlinks from the distro rule. The daemon already creates the devices before it starts guests.
+- Check typing reaches only the focused guest with a real guest, then repeat with the real keyboard behind a watchdog.
 
 ## Phase 5: Windows guest on virtual graphics
 
