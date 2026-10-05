@@ -35,6 +35,16 @@ pub enum SwitchError {
     Hook(String),
 }
 
+/// Microseconds spent in each step of a switch. `input_us`, `blur_us` and `focus_us` are zero
+/// when the target is already the active OS.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq)]
+pub struct StepTimes {
+    pub state_us: u64,
+    pub input_us: u64,
+    pub blur_us: u64,
+    pub focus_us: u64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SwitchReport {
     pub from: String,
@@ -43,6 +53,8 @@ pub struct SwitchReport {
     /// True when the target had to be cold-booted (slow path).
     pub cold_start: bool,
     pub over_budget: bool,
+    #[serde(default)]
+    pub steps: StepTimes,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -58,6 +70,10 @@ pub struct Switcher {
     hv: Arc<dyn Hypervisor>,
     input: Arc<dyn InputRouter>,
     hooks: Arc<dyn Hooks>,
+}
+
+fn micros(since: Instant) -> u64 {
+    return since.elapsed().as_micros() as u64;
 }
 
 // === Engine
@@ -141,8 +157,10 @@ impl Switcher {
         let from_idx = self.input.active();
         let from = self.cfg.oses[from_idx].clone();
         let to = &self.cfg.oses[idx];
+        let mut steps = StepTimes::default();
 
         // 1. make sure the target is live
+        let t = Instant::now();
         let mut cold_start = false;
         match self.hv.state(&to.domain)? {
             VmState::Running => {}
@@ -152,17 +170,26 @@ impl Switcher {
                 self.hv.start(&to.domain)?;
             }
         }
+        steps.state_us = micros(t);
 
         if from.id != to.id {
             // 2. input first, so the user's next keystroke lands in the new OS
+            let t = Instant::now();
             self.input.focus(idx);
+            steps.input_us = micros(t);
             // 3. display + audio
-            if let Err(e) = self.apply_hooks(&from, to) {
-                self.input.focus(from_idx);
-                if let Err(restore) = self.hooks.focus(&from) {
-                    tracing::warn!(os = %from.id, %restore, "could not restore focus after failed switch");
+            match self.apply_hooks(&from, to) {
+                Ok((blur_us, focus_us)) => {
+                    steps.blur_us = blur_us;
+                    steps.focus_us = focus_us;
                 }
-                return Err(SwitchError::Hook(e.to_string()));
+                Err(e) => {
+                    self.input.focus(from_idx);
+                    if let Err(restore) = self.hooks.focus(&from) {
+                        tracing::warn!(os = %from.id, %restore, "could not restore focus after failed switch");
+                    }
+                    return Err(SwitchError::Hook(e.to_string()));
+                }
             }
         }
 
@@ -182,13 +209,19 @@ impl Switcher {
             elapsed_us: elapsed.as_micros() as u64,
             cold_start,
             over_budget,
+            steps,
         });
     }
 
-    fn apply_hooks(&self, from: &OsEntry, to: &OsEntry) -> anyhow::Result<()> {
+    /// Returns the microseconds spent in the blur hook and the focus hook.
+    fn apply_hooks(&self, from: &OsEntry, to: &OsEntry) -> anyhow::Result<(u64, u64)> {
+        let t = Instant::now();
         self.hooks.blur(from)?;
+        let blur_us = micros(t);
+        let t = Instant::now();
         self.hooks.focus(to)?;
-        return Ok(());
+        let focus_us = micros(t);
+        return Ok((blur_us, focus_us));
     }
 
     pub fn start(&self, id: &str) -> Result<(), SwitchError> {
@@ -277,6 +310,30 @@ mod tests {
         let s = setup_with(Arc::new(FailFocusFor("ubuntu")));
         assert!(s.boot_all().is_ok());
         assert_eq!(s.active().id, "ubuntu");
+    }
+
+    #[test]
+    fn steps_are_reported_and_fit_inside_the_total() {
+        let s = setup();
+        s.boot_all().unwrap();
+        let r = s.handle(HotkeyAction::Next).unwrap();
+        let sum = r.steps.state_us + r.steps.input_us + r.steps.blur_us + r.steps.focus_us;
+        assert!(
+            sum <= r.elapsed_us,
+            "steps {sum} us exceed total {} us",
+            r.elapsed_us
+        );
+    }
+
+    #[test]
+    fn switching_to_the_active_os_skips_input_and_hooks() {
+        let s = setup();
+        s.boot_all().unwrap();
+        let r = s.switch_to("ubuntu").unwrap();
+        assert_eq!(
+            (r.steps.input_us, r.steps.blur_us, r.steps.focus_us),
+            (0, 0, 0)
+        );
     }
 
     #[test]

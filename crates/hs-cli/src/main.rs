@@ -82,7 +82,16 @@ fn main() -> Result<()> {
         Some(Payload::Switched(r)) => {
             let ms = r.elapsed_us as f64 / 1000.0;
             let note = if r.cold_start { " (cold boot)" } else { "" };
-            println!("{} → {} in {ms:.2} ms{note}", r.from, r.to);
+            let f = |us: u64| us as f64 / 1000.0;
+            println!(
+                "{} → {} in {ms:.2} ms{note} (state {:.2}, input {:.2}, blur {:.2}, focus {:.2})",
+                r.from,
+                r.to,
+                f(r.steps.state_us),
+                f(r.steps.input_us),
+                f(r.steps.blur_us),
+                f(r.steps.focus_us)
+            );
         }
         _ => println!("ok"),
     }

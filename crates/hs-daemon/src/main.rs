@@ -66,14 +66,25 @@ async fn main() -> Result<()> {
     // Hotkeys → switch engine. Blocking recv lives on its own thread.
     {
         let s = switcher.clone();
-        std::thread::Builder::new().name("hs-hotkeys".into()).spawn(move || {
-            while let Ok(action) = rx.recv() {
-                match s.handle(action) {
-                    Ok(r) => tracing::info!(from = %r.from, to = %r.to, us = r.elapsed_us, "switched"),
-                    Err(e) => tracing::error!(%e, "switch failed"),
+        std::thread::Builder::new()
+            .name("hs-hotkeys".into())
+            .spawn(move || {
+                while let Ok(action) = rx.recv() {
+                    match s.handle(action) {
+                        Ok(r) => tracing::info!(
+                            from = %r.from,
+                            to = %r.to,
+                            us = r.elapsed_us,
+                            state_us = r.steps.state_us,
+                            input_us = r.steps.input_us,
+                            blur_us = r.steps.blur_us,
+                            focus_us = r.steps.focus_us,
+                            "switched"
+                        ),
+                        Err(e) => tracing::error!(%e, "switch failed"),
+                    }
                 }
-            }
-        })?;
+            })?;
     }
 
     return serve(&args.socket, switcher).await;
