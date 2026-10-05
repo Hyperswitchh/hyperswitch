@@ -53,10 +53,14 @@
     </shmem>
 
     <!-- Permanently attached Hyperswitch virtual devices; hyperswitchd decides
-         when they actually receive events. No grab here: the daemon owns the
-         physical devices. -->
-    <input type="evdev"><source dev="/dev/input/hyperswitch/hyperswitch-win11-0"/></input>
-    <input type="evdev"><source dev="/dev/input/hyperswitch/hyperswitch-win11-1"/></input>
+         when they actually receive events. grab="all" and repeat="on" is the form
+         verified in the Phase 4 test. -->
+    <input type="evdev">
+      <source dev="/dev/input/hyperswitch/hyperswitch-win11-0" grab="all" repeat="on"/>
+    </input>
+    <input type="evdev">
+      <source dev="/dev/input/hyperswitch/hyperswitch-win11-1" grab="all" repeat="on"/>
+    </input>
 
     <sound model="ich9"><audio id="1"/></sound>
     <audio id="1" type="pipewire" runtimeDir="/run/user/1000"/>

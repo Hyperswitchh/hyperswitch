@@ -1,0 +1,73 @@
+<!-- Windows 11 guest on virtual graphics (SPICE): works on any machine, no GPU passthrough.
+     Replace the placeholders, then define it:
+       sed -e 's#@DISK@#/path/hs-win11.qcow2#' \
+           -e 's#@WIN_ISO@#/path/Win11.iso#' \
+           -e 's#@VIRTIO_ISO@#/path/virtio-win.iso#' \
+           vm-templates/win11-virtual.xml > /tmp/hs-win11.xml
+       virsh -c qemu:///session define /tmp/hs-win11.xml
+     Create the disk first: qemu-img create -f qcow2 /path/hs-win11.qcow2 64G
+     The qcow2 file is sparse, so it only uses the space Windows actually writes.
+     The system disk is SATA and the network is e1000e because Windows has both drivers built
+     in, so setup works without loading anything. After install, add the virtio drivers from
+     the virtio-win ISO and switch the disk and network to virtio for speed. -->
+<domain type="kvm">
+  <name>hs-win11</name>
+  <memory unit="GiB">4</memory>
+  <vcpu placement="static">4</vcpu>
+  <cpu mode="host-passthrough"><topology sockets="1" cores="4" threads="1"/></cpu>
+
+  <os firmware="efi">
+    <type arch="x86_64" machine="q35">hvm</type>
+    <firmware>
+      <feature enabled="yes" name="enrolled-keys"/>
+      <feature enabled="yes" name="secure-boot"/>
+    </firmware>
+  </os>
+  <features>
+    <acpi/><apic/><smm state="on"/>
+    <hyperv mode="custom">
+      <relaxed state="on"/>
+      <vapic state="on"/>
+      <spinlocks state="on" retries="8191"/>
+    </hyperv>
+  </features>
+  <clock offset="localtime">
+    <timer name="hypervclock" present="yes"/>
+    <timer name="hpet" present="no"/>
+  </clock>
+
+  <devices>
+    <disk type="file" device="disk">
+      <driver name="qemu" type="qcow2" cache="none" discard="unmap"/>
+      <source file="@DISK@"/>
+      <target dev="sda" bus="sata"/>
+    </disk>
+    <disk type="file" device="cdrom">
+      <driver name="qemu" type="raw"/>
+      <source file="@WIN_ISO@"/>
+      <target dev="sdb" bus="sata"/>
+      <readonly/>
+      <boot order="1"/>
+    </disk>
+    <disk type="file" device="cdrom">
+      <driver name="qemu" type="raw"/>
+      <source file="@VIRTIO_ISO@"/>
+      <target dev="sdc" bus="sata"/>
+      <readonly/>
+    </disk>
+
+    <interface type="user"><model type="e1000e"/></interface>
+    <tpm model="tpm-crb"><backend type="emulator" version="2.0"/></tpm>
+
+    <graphics type="spice"><listen type="none"/><image compression="off"/></graphics>
+    <video><model type="qxl" ram="65536" vram="65536" vgamem="16384" heads="1" primary="yes"/></video>
+    <channel type="spicevmc"><target type="virtio" name="com.redhat.spice.0"/></channel>
+    <input type="tablet" bus="usb"/>
+
+    <!-- Permanently attached Hyperswitch virtual device. This exact form (grab="all",
+         repeat="on") is what the Phase 4 test verified end to end. -->
+    <input type="evdev">
+      <source dev="/dev/input/hyperswitch/hyperswitch-win11-0" grab="all" repeat="on"/>
+    </input>
+  </devices>
+</domain>
