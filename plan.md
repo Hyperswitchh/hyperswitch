@@ -155,34 +155,53 @@ Gate: either Windows shows the P620 in Device Manager and Looking Glass displays
 Start only after Phase 5 and 6 are done. Everything below depends on a working Windows guest and a measured switch time. Each item needs its own plan before any code.
 
 Order:
-1. Tray or overlay UI over the existing socket (Tauri). Both items below are awkward to use without it.
-2. USB device passthrough (details below).
-3. Shared clipboard (SPICE vdagent) and shared folder (virtiofs).
-4. Input hotplug through a udev monitor.
-5. Snapshots, starting with a spike (details below).
-6. Hardware compatibility list based on hwcheck results.
-7. Bootable image and installer. This is last and does not target laptops in v1.
+1. Tray or overlay UI over the existing socket (Tauri). USB moves and snapshots are awkward to use without it.
+2. Shared udev monitor in the daemon, built once for both USB plug events and input hotplug.
+3. USB device passthrough (details below). Manual `usb attach`, `usb detach` and `usb move` ship first and do not need the monitor. Follow-focus and auto-attach need it.
+4. Shared clipboard (SPICE vdagent) and shared folder (virtiofs).
+5. Input hotplug through the shared udev monitor.
+6. Snapshots, starting with a spike (details below).
+7. Hardware compatibility list based on hwcheck results.
+8. Bootable image and installer. This is last and does not target laptops in v1.
 
 ### USB device passthrough
 
-Give a USB device (flash drive, phone, dongle) to one guest at a time.
-- Use libvirt `<hostdev mode='subsystem' type='usb'>` matched by vendor and product id, attached live (`virsh attach-device --live`, or the `virt` crate equivalent).
-- Add IPC and CLI commands: `usb list`, `usb attach <guest> <device>`, `usb detach <guest> <device>`.
-- Optional: auto-attach rules in `hyperswitch.toml` (for example, a phone always goes to win11).
+Give a USB device (flash drive, phone, dongle) to one OS at a time.
 
-Safety rules (all enforced by the daemon, with a clear error):
+Principle: **USB devices never move as a side effect of switching OS.** Switching focus moves keyboard, mouse, screen and audio only. A device moves only when the user says so, which prevents corruption from a drive changing owner mid-write.
+
+Three ways to move a device, all explicit:
+1. **Button or command.** The overlay shows each USB device with a button such as "Send to Windows". The CLI equivalent is `hyperswitch usb move <device> <os>`. Before the move the daemon checks that the current owner is not using the device and asks the user to confirm a safe eject. See the safety rules for what the daemon can and cannot do for a guest.
+2. **Unplug and replug (follow focus).** The user unplugs the device, switches to the OS they want and plugs it back in. The daemon gives the new device to whichever OS is active at that moment. If the active OS is the host, the daemon does nothing and the host keeps the device. Controlled by `usb_follow_focus = true | false` in `hyperswitch.toml`, so some users can keep every new device on one OS.
+3. **Auto-attach rules** in `hyperswitch.toml` (for example, a phone always goes to win11).
+Precedence: an explicit rule wins over follow focus, which wins over leaving the device on the host.
+
+Implementation:
+- libvirt `<hostdev mode='subsystem' type='usb'>` matched by vendor and product id, attached live (`virsh attach-device --live`, or the `virt` crate equivalent).
+- IPC and CLI commands: `usb list`, `usb attach <guest> <device>`, `usb detach <guest> <device>`, `usb move <device> <os>`.
+- Verify, do not assume: QEMU may reconnect a replugged device to the guest it was attached to before, matching by vendor and product id. If it does, the daemon must detach the device on unplug so the replug decision is made fresh from the active OS.
+
+Safety rules (enforced by the daemon, with a clear error):
 - Refuse any device listed in `input_devices`. The daemon owns those.
+- Never auto-pass keyboards and mice (USB HID class). A newly plugged keyboard or mouse goes to the input router so it follows the hotkey. This needs input hotplug.
 - Refuse hubs (USB class 09) and the device that holds the host's root disk.
 - Warn before passing an internal device. This laptop has a Broadcom 58200 (likely fingerprint or smart card reader), a webcam and an AX201 Bluetooth controller on the USB bus. Passing one takes it away from the host.
-- Refuse while the host has a partition of the device mounted, or sync and unmount it first. Attaching it with the host mounting it is a surprise removal and can lose unwritten data.
-- Moving a drive between guests requires a safe eject in the first guest. Detaching without it can corrupt NTFS or exFAT.
-- A device is exclusive to one guest while attached. Say so in the CLI output.
+- Host side: refuse while a partition of the device is mounted on the host, or sync and unmount it first. Attaching it while the host has it mounted is a surprise removal and can lose unwritten data.
+- Guest side: the daemon cannot unmount inside a guest without extra tooling (the qemu-guest-agent has no unmount command, so this would need `guest-exec` and per-OS scripts). Version one asks the user to confirm they ejected it in the guest, and says so in the prompt. Moving a drive without a safe eject can corrupt NTFS or exFAT.
+- Physically unplugging is the user's choice and is a surprise removal. It is safe only when nothing is copying. The button path is the recommended one and the CLI output says so.
+- A device is exclusive to one OS while attached. Say so in the CLI output.
+
+Plug and unplug events (need the shared udev monitor):
+- Watch for USB devices appearing and disappearing.
+- Unplug while attached: mark the device as detached, drop it from the daemon's state and log it.
+- Replug: apply the rules above (explicit rule, then follow focus, then stay on the host).
+- Gate: unplug and replug a flash drive that is attached to a guest. The daemon state stays correct and the drive lands on the active OS.
 
 Notes:
 - Under `qemu:///session` the guest cannot open USB device nodes without a udev rule. Test under `qemu:///system`.
 - A guest with a passed-through device generally cannot take a memory snapshot. Detach first.
 
-Gate: a flash drive moves between two running guests in both directions, with a safe eject each time and without a reboot, and the files on it are readable in each.
+Gate: a flash drive moves between two running guests in both directions using the button or `usb move`, with a safe eject each time and without a reboot, and the files on it are readable in each. A second run proves unplug and replug follows focus, and that switching OS alone never moves the drive.
 
 ### Snapshots
 
@@ -208,6 +227,8 @@ Gate: snapshot each guest, change a file, revert, confirm the file is back to it
 | USB device passed while mounted on the host | Data loss | Daemon refuses until unmounted, safe eject before moving |
 | Passing an internal USB device (Bluetooth, webcam) | Host loses it | Warn before attaching, require exact vendor and product id |
 | External snapshot revert not supported | Snapshot feature unusable | Spike first, drop the item if it fails |
+| Device unplugged while attached to a guest | Stale state, guest sees a dead device | Udev monitor updates state, replug follows the active OS |
+| Guest cannot be told to unmount a drive | Corruption when moving a drive | Ask the user to confirm a safe eject, never move it as a side effect of switching |
 
 ## Success criteria
 
