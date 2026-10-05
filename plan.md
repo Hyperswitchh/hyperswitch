@@ -187,6 +187,7 @@ Gate: either Windows shows the P620 in Device Manager and Looking Glass displays
 Start only after Phase 5 and 6 are done. Everything below depends on a working Windows guest and a measured switch time. Each item needs its own plan before any code.
 
 Order:
+0. On-demand mode and idle guest policy (details below). Do this first, because it also fixes the startup race that breaks every cold start.
 1. Tray or overlay UI over the existing socket (Tauri). USB moves and snapshots are awkward to use without it.
 2. Shared udev monitor in the daemon, built once for both USB plug events and input hotplug.
 3. USB device passthrough (details below). Manual `usb attach`, `usb detach` and `usb move` ship first and do not need the monitor. Follow-focus and auto-attach need it.
@@ -195,6 +196,27 @@ Order:
 6. Snapshots, starting with a spike (details below).
 7. Hardware compatibility list based on hwcheck results.
 8. Bootable image and installer. This is last and does not target laptops in v1.
+
+### On-demand mode and idle guest policy
+
+Why: the user wants only one OS running when the machine starts, and to start the other only when needed, because two running guests slow the machine. Measured on this 14 GB laptop: free memory fell from about 7 GB to about 3 GB with Windows (4 GB) and Alpine running, and an idle Windows guest used 0.2 to 0.7 of a core, spiking to all 4 vCPUs during first-boot updates. RAM is the binding limit.
+
+Already possible: `autostart = false` per OS, `hyperswitch start <id>` and `stop <id>`, and a switch to a stopped guest cold-starts it. The trade-off to state in the docs: switching is instant only while both guests are running. A cold-started Windows takes 30 to 60 seconds to boot.
+
+Steps, in order:
+1. **Fix the startup race.** After the router creates its virtual devices, wait (up to about 5 s) for the udev symlinks `/dev/input/hyperswitch/hyperswitch-<id>-<n>` before starting any guest, and wait until the physical device node is readable (udev ACLs can arrive after the node appears). Log a warning and carry on if the wait times out. This applies to `boot_all`, `start` and a cold start on switch. Seen twice: QEMU failed to open a symlink that did not exist yet.
+2. **Make autostart off by default.** It currently defaults to on. The example config enables it only for the OS the machine boots into.
+3. **`hyperswitch up <os>` and `hyperswitch down <os>`.** `up` starts the daemon if needed, starts the guest, waits until it is running and moves focus to it. `down` shuts the guest down, waits until it is off (with a timeout and a force option) and frees its RAM. The daemon can run as a user service started on demand.
+4. **Idle guest policy:** `idle_guest = "run" | "pause" | "save"` in `hyperswitch.toml`, default `run`.
+   - `pause` freezes the guest that lost focus and resumes it on switch back. It uses the existing `Hypervisor::pause`, which is currently unused. Frees CPU, not RAM. Guest clocks jump on resume.
+   - `save` writes the guest to disk and frees its RAM. Spike first: test libvirt managed save on a Windows guest with a TPM, measure the restore time, refuse when passthrough devices are attached, and check free disk space first (up to the guest's RAM size per save).
+5. The UI should show a "starting" state for a cold-started guest.
+
+Notes:
+- A guest that has the Hyperswitch evdev input attached cannot start unless the daemon is already running. `up` handles that order. Starting such a guest directly with virt-manager fails.
+- With the future bootable image the host has no desktop OS, so "one OS at boot" means autostart for the first guest only.
+
+Gate: on a fresh login only one OS is running and free RAM is not reduced by the other guest. `hyperswitch up win11` brings Windows up and switches to it. `hyperswitch down win11` returns the RAM. With `idle_guest = "pause"` the unfocused guest uses near zero CPU and the switch back takes well under a second.
 
 ### USB device passthrough
 
