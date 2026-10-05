@@ -87,7 +87,7 @@ Findings:
 
 Gate passed. The two guests are left running for Phase 4.
 
-## Phase 4: Real input routing (router and guest wiring verified, real keyboard pending)
+## Phase 4: Real input routing (done, real keyboard step skipped by choice)
 
 Safety setup: a test-only udev rule (`/etc/udev/rules.d/71-hyperswitch-test.rules`) gives the user access to `/dev/uinput` and to devices named `hs-fake-*` or `hyperswitch-*`, and sets `LIBINPUT_IGNORE_DEVICE` so the GNOME desktop never types them. Remove it when Phase 4 is finished: `sudo rm /etc/udev/rules.d/71-hyperswitch-test.rules && sudo udevadm control --reload`.
 
@@ -114,19 +114,20 @@ Findings:
 - `virsh send-key` presses keys together, so doubled letters are dropped. Send keys one at a time.
 - Typing latency was not measured.
 
-Still to do for this phase:
-- Repeat with your real keyboard behind a watchdog. This is the risky step and needs your go-ahead.
-- Remove the test udev rule when Phase 4 is finished.
+Skipped by choice: the real keyboard test. The test udev rule `/etc/udev/rules.d/71-hyperswitch-test.rules` should be removed when no longer needed.
 
-## Phase 5: Windows guest on virtual graphics
+## Phase 5: Windows guest on virtual graphics (in progress)
 
-Work:
-- Fetch a Windows 11 ISO and the virtio-win drivers ISO. Needs approval for each download.
-- Create `hs-win11` with a qcow2 disk, OVMF, swtpm and virtio, using a trimmed copy of `vm-templates/win11.xml` without the `hostdev` and `shmem` sections.
-- Install Windows. Install virtio drivers and the SPICE guest tools.
-- Add to the config as `display = spice`. Run all of Phase 3 and 4 tests with Windows.
+Done so far:
+- `vm-templates/win11-virtual.xml` added: UEFI with Secure Boot, TPM 2.0 (swtpm), 4 GB RAM, 4 vCPUs, SPICE with QXL, SATA system disk and e1000e network (both inbox Windows drivers, so the installer needs no driver step), Windows ISO and virtio-win ISO as CD-ROMs, and the Hyperswitch evdev input. Placeholders `@DISK@`, `@WIN_ISO@`, `@VIRTIO_ISO@`. It validates against the libvirt schema.
+- `vm-templates/win11.xml` evdev inputs now use the form verified in Phase 4 (`grab="all"`, `repeat="on"`).
+- virtio-win 0.1.302 ISO (877 MB, fedorapeople.org) downloading to `~/hyperswitch-vms/`.
 
-Gate: switch between Ubuntu host window and the Windows guest by hotkey, in both directions, repeatedly.
+Waiting on: a Windows 11 x64 ISO supplied by the user (Microsoft's download link is per session, so it cannot be scripted).
+
+Next: create a 64 GB sparse qcow2 (disk has about 51 GB free, Windows will use roughly 25 GB), define the guest under `qemu:///session`, install Windows, install the virtio drivers and SPICE guest tools, then run the Phase 3 and 4 checks with Windows as one of the two guests.
+
+Gate: switch between the Ubuntu host window and the Windows guest by hotkey, in both directions, repeatedly.
 
 ## Phase 6: Measure
 
@@ -151,12 +152,47 @@ Gate: either Windows shows the P620 in Device Manager and Looking Glass displays
 
 ## Phase 8: Product features
 
-Order, each needing its own plan:
-1. Tray or overlay UI over the existing socket (Tauri).
-2. Shared clipboard (SPICE vdagent) and shared folder (virtiofs).
-3. Input hotplug through a udev monitor.
-4. Hardware compatibility list based on hwcheck results.
-5. Bootable image and installer. This is last and does not target laptops in v1.
+Start only after Phase 5 and 6 are done. Everything below depends on a working Windows guest and a measured switch time. Each item needs its own plan before any code.
+
+Order:
+1. Tray or overlay UI over the existing socket (Tauri). Both items below are awkward to use without it.
+2. USB device passthrough (details below).
+3. Shared clipboard (SPICE vdagent) and shared folder (virtiofs).
+4. Input hotplug through a udev monitor.
+5. Snapshots, starting with a spike (details below).
+6. Hardware compatibility list based on hwcheck results.
+7. Bootable image and installer. This is last and does not target laptops in v1.
+
+### USB device passthrough
+
+Give a USB device (flash drive, phone, dongle) to one guest at a time.
+- Use libvirt `<hostdev mode='subsystem' type='usb'>` matched by vendor and product id, attached live (`virsh attach-device --live`, or the `virt` crate equivalent).
+- Add IPC and CLI commands: `usb list`, `usb attach <guest> <device>`, `usb detach <guest> <device>`.
+- Optional: auto-attach rules in `hyperswitch.toml` (for example, a phone always goes to win11).
+
+Safety rules (all enforced by the daemon, with a clear error):
+- Refuse any device listed in `input_devices`. The daemon owns those.
+- Refuse hubs (USB class 09) and the device that holds the host's root disk.
+- Warn before passing an internal device. This laptop has a Broadcom 58200 (likely fingerprint or smart card reader), a webcam and an AX201 Bluetooth controller on the USB bus. Passing one takes it away from the host.
+- Refuse while the host has a partition of the device mounted, or sync and unmount it first. Attaching it with the host mounting it is a surprise removal and can lose unwritten data.
+- Moving a drive between guests requires a safe eject in the first guest. Detaching without it can corrupt NTFS or exFAT.
+- A device is exclusive to one guest while attached. Say so in the CLI output.
+
+Notes:
+- Under `qemu:///session` the guest cannot open USB device nodes without a udev rule. Test under `qemu:///system`.
+- A guest with a passed-through device generally cannot take a memory snapshot. Detach first.
+
+Gate: a flash drive moves between two running guests in both directions, with a safe eject each time and without a reboot, and the files on it are readable in each.
+
+### Snapshots
+
+Do a spike before any feature work.
+- Spike: on `hs-win11`, take a disk-only external snapshot by hand with `virsh`, change a file, revert, and confirm the file is back. Libvirt 12.0.0 `snapshot-revert` has a `--reset-nvram` option, so UEFI NVRAM is handled, but reverting external snapshots is unproven here.
+- If revert works: add thin IPC and CLI commands over it (`snapshot create`, `list`, `revert`, `delete <guest> [name]`). Check free disk space first and refuse if too low. Memory snapshots can write up to 6 GB for Windows, and this laptop has about 50 GB free.
+- If revert does not work: drop the item. virt-manager and `virsh` already do snapshots, and Hyperswitch's value is switching.
+- Limits: guests with passed-through devices (USB now, GPU later) cannot take memory snapshots. The overlay UI can show the snapshot list later.
+
+Gate: snapshot each guest, change a file, revert, confirm the file is back to its old state, and confirm the guest is still switchable.
 
 ## Risks
 
@@ -169,6 +205,9 @@ Order, each needing its own plan:
 | Windows licence and ISO download | Delay | User supplies licence, approve each download |
 | `virt` or `evdev` crate API mismatch | Build errors | Fix in Phase 3 against the real crates |
 | Hybrid graphics changes with driver updates | Passthrough breaks | Pin the driver version during the experiment |
+| USB device passed while mounted on the host | Data loss | Daemon refuses until unmounted, safe eject before moving |
+| Passing an internal USB device (Bluetooth, webcam) | Host loses it | Warn before attaching, require exact vendor and product id |
+| External snapshot revert not supported | Snapshot feature unusable | Spike first, drop the item if it fails |
 
 ## Success criteria
 
