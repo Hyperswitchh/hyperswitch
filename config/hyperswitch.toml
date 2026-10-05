@@ -1,0 +1,37 @@
+# /etc/hyperswitch/hyperswitch.toml
+
+[hotkeys]
+next = "LEFTCTRL+LEFTALT+RIGHT"
+prev = "LEFTCTRL+LEFTALT+LEFT"
+# LEFTCTRL+LEFTALT+1 → first OS, +2 → second, ...
+direct_modifier = "LEFTCTRL+LEFTALT"
+
+[switch]
+target_latency_ms = 100
+# Physical devices Hyperswitch grabs. Empty means hotkeys are off and you switch with
+# the CLI. Find yours with: ls -l /dev/input/by-id/ , for example:
+#   "/dev/input/by-id/usb-<vendor>_<keyboard>-event-kbd"
+input_devices = []
+# Placeholders: {id} {name} {domain} {window} {monitor_input}
+# {window} expands to the sway criteria for the guest's viewer, based on its display type.
+on_focus = [
+  "swaymsg '[{window}] focus, fullscreen enable'",
+  "/usr/lib/hyperswitch/audio.sh unmute {domain}",
+]
+on_blur = [
+  "/usr/lib/hyperswitch/audio.sh mute {domain}",
+]
+
+[[os]]
+id = "ubuntu"
+name = "Ubuntu 24.04"
+domain = "hs-ubuntu"
+autostart = true
+display = { type = "spice", port = 5901 }
+
+[[os]]
+id = "win11"
+name = "Windows 11"
+domain = "hs-win11"
+autostart = true
+display = { type = "looking-glass", shm = "/dev/kvmfr0" }

@@ -1,0 +1,26 @@
+[package]
+name = "hs-core"
+description = "Hyperswitch core: config, VM backends, input router, switch engine, IPC protocol"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+default = []
+# Real libvirt backend. Needs libvirt-dev (`apt install libvirt-dev`).
+libvirt = ["dep:virt"]
+# Real evdev/uinput input routing (Linux only, needs /dev/input + /dev/uinput access).
+evdev = ["dep:evdev"]
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+tracing.workspace = true
+virt = { version = "0.4", optional = true }
+evdev = { version = "0.12", optional = true }

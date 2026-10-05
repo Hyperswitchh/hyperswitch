@@ -1,0 +1,5 @@
+/target
+/distro/mkosi.output
+/distro/rootfs/usr/bin
+*.qcow2
+*.iso

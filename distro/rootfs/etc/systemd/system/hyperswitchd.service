@@ -1,0 +1,18 @@
+[Unit]
+Description=Hyperswitch host daemon
+After=libvirtd.service systemd-udev-settle.service
+Requires=libvirtd.service
+
+[Service]
+ExecStartPre=/usr/bin/hyperswitch-check
+ExecStart=/usr/bin/hyperswitchd
+Restart=on-failure
+RestartSec=2
+# Input latency matters: run the router threads at real-time priority.
+CPUSchedulingPolicy=fifo
+CPUSchedulingPriority=50
+RuntimeDirectory=hyperswitch
+RuntimeDirectoryMode=0700
+
+[Install]
+WantedBy=multi-user.target

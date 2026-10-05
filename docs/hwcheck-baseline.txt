@@ -1,0 +1,10 @@
+Hyperswitch hardware check
+
+  [PASS] CPU virtualization     Intel VT-x
+  [PASS] /dev/kvm               present
+  [PASS] IOMMU                  21 IOMMU groups
+  [WARN] RAM                    14.8 GB usable (16 GB installed minimum, 32 recommended)
+  [PASS] GPUs                   2 GPUs, one can be passed through
+  [PASS] /dev/uinput            present
+
+Usable: Hyperswitch will fall back to virtual GPUs where needed.

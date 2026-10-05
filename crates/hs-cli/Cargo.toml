@@ -1,0 +1,19 @@
+[package]
+name = "hs-cli"
+description = "hyperswitch: command-line client for hyperswitchd"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "hyperswitch"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+hs-core.workspace = true
+anyhow.workspace = true
+serde_json.workspace = true
+clap.workspace = true

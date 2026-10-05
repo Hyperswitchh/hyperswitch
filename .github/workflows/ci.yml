@@ -1,0 +1,23 @@
+name: ci
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with: { components: "clippy, rustfmt" }
+      - run: sudo apt-get update && sudo apt-get install -y libvirt-dev
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+      - name: Build host binaries (real libvirt + evdev)
+        run: cargo build --release -p hs-daemon --features host
+      - name: Smoke test (mock daemon + CLI)
+        run: |
+          cargo build -p hs-daemon -p hs-cli
+          ./target/debug/hyperswitchd --mock -c config/hyperswitch.toml -s /tmp/hs.sock &
+          sleep 1
+          ./target/debug/hyperswitch -s /tmp/hs.sock status
+          ./target/debug/hyperswitch -s /tmp/hs.sock next

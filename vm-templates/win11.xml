@@ -1,0 +1,65 @@
+<!-- Windows 11 guest, GPU passthrough + Looking Glass + Hyperswitch input.
+     Define with: virsh define vm-templates/win11.xml
+     Replace PCI addresses with yours (lspci -nn | grep -i vga). -->
+<domain type="kvm">
+  <name>hs-win11</name>
+  <memory unit="GiB">12</memory>
+  <memoryBacking><hugepages/></memoryBacking>
+
+  <!-- CPU pinning: guest gets host cores 4-7 exclusively -->
+  <vcpu placement="static">4</vcpu>
+  <cputune>
+    <vcpupin vcpu="0" cpuset="4"/>
+    <vcpupin vcpu="1" cpuset="5"/>
+    <vcpupin vcpu="2" cpuset="6"/>
+    <vcpupin vcpu="3" cpuset="7"/>
+    <emulatorpin cpuset="0-1"/>
+  </cputune>
+  <cpu mode="host-passthrough"><topology sockets="1" cores="4" threads="1"/></cpu>
+
+  <os firmware="efi">
+    <type arch="x86_64" machine="q35">hvm</type>
+    <loader secure="yes"/>
+  </os>
+  <features>
+    <acpi/><apic/><smm state="on"/>
+    <hyperv mode="passthrough"/>
+    <kvm><hidden state="on"/></kvm>
+  </features>
+
+  <devices>
+    <disk type="file" device="disk">
+      <driver name="qemu" type="qcow2" cache="none" io="native" discard="unmap"/>
+      <source file="/var/lib/hyperswitch/disks/win11.qcow2"/>
+      <target dev="vda" bus="virtio"/>
+    </disk>
+    <interface type="network">
+      <source network="default"/><model type="virtio"/>
+    </interface>
+    <tpm model="tpm-crb"><backend type="emulator" version="2.0"/></tpm>
+
+    <!-- Dedicated GPU + its HDMI audio function, handed over via VFIO -->
+    <hostdev mode="subsystem" type="pci" managed="yes">
+      <source><address domain="0x0000" bus="0x01" slot="0x00" function="0x0"/></source>
+    </hostdev>
+    <hostdev mode="subsystem" type="pci" managed="yes">
+      <source><address domain="0x0000" bus="0x01" slot="0x00" function="0x1"/></source>
+    </hostdev>
+
+    <!-- Looking Glass frame buffer (KVMFR) -->
+    <shmem name="looking-glass">
+      <model type="ivshmem-plain"/>
+      <size unit="M">64</size>
+    </shmem>
+
+    <!-- Permanently attached Hyperswitch virtual devices; hyperswitchd decides
+         when they actually receive events. No grab here: the daemon owns the
+         physical devices. -->
+    <input type="evdev"><source dev="/dev/input/hyperswitch/hyperswitch-win11-0"/></input>
+    <input type="evdev"><source dev="/dev/input/hyperswitch/hyperswitch-win11-1"/></input>
+
+    <sound model="ich9"><audio id="1"/></sound>
+    <audio id="1" type="pipewire" runtimeDir="/run/user/1000"/>
+    <video><model type="none"/></video>
+  </devices>
+</domain>

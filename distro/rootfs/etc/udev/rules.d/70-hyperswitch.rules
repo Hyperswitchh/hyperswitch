@@ -1,0 +1,5 @@
+# Stable paths for the per-VM virtual input devices created by hyperswitchd:
+#   /dev/input/hyperswitch/hyperswitch-<os-id>-<n>
+KERNEL=="event*", SUBSYSTEM=="input", ATTRS{name}=="hyperswitch-*", SYMLINK+="input/hyperswitch/%s{name}", GROUP="kvm", MODE="0660"
+KERNEL=="uinput", GROUP="input", MODE="0660"
+KERNEL=="kvmfr*", GROUP="kvm", MODE="0660"

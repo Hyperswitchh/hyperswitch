@@ -1,0 +1,16 @@
+[Unit]
+Description=Hyperswitch display session (sway kiosk showing guest displays)
+After=hyperswitchd.service systemd-user-sessions.service
+Wants=hyperswitchd.service
+
+[Service]
+User=hs
+PAMName=login
+TTYPath=/dev/tty1
+StandardInput=tty
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+ExecStart=/usr/bin/sway --config /etc/hyperswitch/sway.conf
+Restart=always
+
+[Install]
+WantedBy=graphical.target

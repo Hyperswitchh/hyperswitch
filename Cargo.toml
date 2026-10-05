@@ -1,0 +1,31 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/hs-core",
+    "crates/hs-daemon",
+    "crates/hs-cli",
+    "crates/hs-hwcheck",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/your-org/hyperswitch"
+rust-version = "1.75"
+
+[workspace.lints.clippy]
+# The project style requires an explicit `return` for a function's value.
+needless_return = "allow"
+
+[workspace.dependencies]
+anyhow = "1"
+thiserror = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "signal", "time"] }
+clap = { version = "4", features = ["derive"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+hs-core = { path = "crates/hs-core" }

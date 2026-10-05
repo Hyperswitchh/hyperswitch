@@ -1,0 +1,16 @@
+[package]
+name = "hs-hwcheck"
+description = "hyperswitch-check: verifies a machine can run Hyperswitch"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "hyperswitch-check"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
