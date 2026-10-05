@@ -88,33 +88,6 @@ impl HotkeyMatcher {
     }
 }
 
-// === Suppression
-
-/// Remembers keys whose release was already sent to the old guest when a hotkey fired,
-/// so the physical key-up (and any auto-repeat) is not forwarded to the new guest as a
-/// key it never saw pressed.
-#[derive(Default)]
-pub struct KeySuppressor {
-    codes: HashSet<u16>,
-}
-
-impl KeySuppressor {
-    pub fn suppress(&mut self, code: u16) {
-        self.codes.insert(code);
-    }
-
-    /// True when an event for `code` (evdev value: 0 up, 1 down, 2 repeat) should be forwarded.
-    pub fn allow(&mut self, code: u16, value: i32) -> bool {
-        if !self.codes.contains(&code) {
-            return true;
-        }
-        if value == 0 {
-            self.codes.remove(&code);
-        }
-        return false;
-    }
-}
-
 // === Router
 
 /// Moves keyboard/mouse focus to a target VM (by index into `Config::oses`).
@@ -189,7 +162,6 @@ pub mod evdev_router {
                     .name(format!("hs-input-{n}"))
                     .spawn(move || {
                         let mut targets = targets;
-                        let mut suppressor = KeySuppressor::default();
                         loop {
                             let events: Vec<InputEvent> = match phys.fetch_events() {
                                 Ok(evs) => evs.collect(),
@@ -209,16 +181,12 @@ pub mod evdev_router {
                                     let mut m = matcher.lock().unwrap();
                                     if let Some(action) = m.on_key(&name, ev.value() == 1) {
                                         // Release everything still held on the current VM.
-                                        let codes: Vec<u16> =
-                                            m.held().filter_map(|k| key_code(k)).collect();
-                                        let ups: Vec<InputEvent> = codes
-                                            .iter()
-                                            .map(|c| InputEvent::new(EventType::KEY, *c, 0))
+                                        let ups: Vec<InputEvent> = m
+                                            .held()
+                                            .filter_map(|k| key_code(k))
+                                            .map(|c| InputEvent::new(EventType::KEY, c, 0))
                                             .collect();
                                         let _ = targets[cur].emit(&ups);
-                                        for c in codes {
-                                            suppressor.suppress(c);
-                                        }
                                         let _ = actions.send(action);
                                         fired = true;
                                         break;
@@ -226,20 +194,13 @@ pub mod evdev_router {
                                 }
                             }
                             if fired {
-                                // The batch that completed the combo belongs to no guest.
+                                // The batch that completed the combo belongs to no guest. The
+                                // physical releases that follow reach the new guest, where the
+                                // input core drops them because those keys are not down there.
                                 continue;
                             }
                             // Forward the whole synced batch to the active VM only.
-                            let forward: Vec<InputEvent> = events
-                                .into_iter()
-                                .filter(|ev| match ev.kind() {
-                                    InputEventKind::Key(k) => {
-                                        suppressor.allow(k.code(), ev.value())
-                                    }
-                                    _ => true,
-                                })
-                                .collect();
-                            let _ = targets[active.load(Ordering::SeqCst)].emit(&forward);
+                            let _ = targets[active.load(Ordering::SeqCst)].emit(&events);
                         }
                     })?;
             }
@@ -337,22 +298,5 @@ mod tests {
     fn plain_arrow_is_ignored() {
         let mut h = m();
         assert_eq!(h.on_key("RIGHT", true), None);
-    }
-
-    #[test]
-    fn suppressor_drops_release_of_released_keys_once() {
-        let mut s = KeySuppressor::default();
-        s.suppress(29);
-        assert!(!s.allow(29, 2)); // auto-repeat while still held
-        assert!(!s.allow(29, 0)); // the physical key-up
-        assert!(s.allow(29, 1)); // a fresh press is forwarded again
-    }
-
-    #[test]
-    fn suppressor_ignores_other_keys() {
-        let mut s = KeySuppressor::default();
-        s.suppress(29);
-        assert!(s.allow(30, 1));
-        assert!(s.allow(30, 0));
     }
 }
