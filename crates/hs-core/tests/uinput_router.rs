@@ -155,7 +155,18 @@ fn hotkey_switching_routes_input_and_leaves_no_stuck_keys() {
         // the hotkey fires an action; the engine would then move focus
         send(&mut fake, Key::KEY_LEFTCTRL, 1);
         send(&mut fake, Key::KEY_LEFTALT, 1);
-        send(&mut fake, Key::KEY_RIGHT, 1);
+        // Odd cycles press and release the combo key in one write, so both land in the same
+        // batch. The router must still see the release or the next combo is ignored.
+        let batched = cycle % 2 == 1;
+        if batched {
+            fake.emit(&[
+                InputEvent::new(EventType::KEY, Key::KEY_RIGHT.code(), 1),
+                InputEvent::new(EventType::KEY, Key::KEY_RIGHT.code(), 0),
+            ])
+            .expect("emit batched tap");
+        } else {
+            send(&mut fake, Key::KEY_RIGHT, 1);
+        }
         let action = rx
             .recv_timeout(Duration::from_secs(1))
             .unwrap_or_else(|_| panic!("cycle {cycle}: no hotkey action"));
@@ -163,7 +174,9 @@ fn hotkey_switching_routes_input_and_leaves_no_stuck_keys() {
         router.focus(next);
 
         // physical releases after the switch must not reach the new guest
-        send(&mut fake, Key::KEY_RIGHT, 0);
+        if !batched {
+            send(&mut fake, Key::KEY_RIGHT, 0);
+        }
         send(&mut fake, Key::KEY_LEFTALT, 0);
         send(&mut fake, Key::KEY_LEFTCTRL, 0);
         settle();

@@ -82,6 +82,23 @@ impl HotkeyMatcher {
         return None;
     }
 
+    /// Feeds one batch of key events and returns the first hotkey it completes, with the keys
+    /// held at that moment. Every event in the batch still updates the held state, so a
+    /// key-up that shares a batch with the combo's last key-down is not lost. Dropping it would
+    /// leave that key "held" and make its next press look like auto-repeat.
+    pub fn on_batch(&mut self, events: &[(String, bool)]) -> Option<(HotkeyAction, Vec<String>)> {
+        let mut found: Option<(HotkeyAction, Vec<String>)> = None;
+        for (key, pressed) in events {
+            let action = self.on_key(key, *pressed);
+            if found.is_none() {
+                if let Some(a) = action {
+                    found = Some((a, self.held().cloned().collect()));
+                }
+            }
+        }
+        return found;
+    }
+
     /// Keys currently held, released on the old target before switching so no key "sticks".
     pub fn held(&self) -> impl Iterator<Item = &String> {
         return self.pressed.iter();
@@ -171,29 +188,26 @@ pub mod evdev_router {
                                 }
                             };
                             let cur = active.load(Ordering::SeqCst);
-                            let mut fired = false;
-                            for ev in &events {
-                                if let InputEventKind::Key(key) = ev.kind() {
-                                    if ev.value() == 2 {
-                                        continue; // ignore auto-repeat for matching
+                            let keys: Vec<(String, bool)> = events
+                                .iter()
+                                .filter_map(|ev| match ev.kind() {
+                                    // value 2 is auto-repeat, ignored for matching
+                                    InputEventKind::Key(k) if ev.value() != 2 => {
+                                        Some((format!("{k:?}"), ev.value() == 1))
                                     }
-                                    let name = format!("{key:?}");
-                                    let mut m = matcher.lock().unwrap();
-                                    if let Some(action) = m.on_key(&name, ev.value() == 1) {
-                                        // Release everything still held on the current VM.
-                                        let ups: Vec<InputEvent> = m
-                                            .held()
-                                            .filter_map(|k| key_code(k))
-                                            .map(|c| InputEvent::new(EventType::KEY, c, 0))
-                                            .collect();
-                                        let _ = targets[cur].emit(&ups);
-                                        let _ = actions.send(action);
-                                        fired = true;
-                                        break;
-                                    }
-                                }
-                            }
-                            if fired {
+                                    _ => None,
+                                })
+                                .collect();
+                            let hit = matcher.lock().unwrap().on_batch(&keys);
+                            if let Some((action, held)) = hit {
+                                // Release everything that was held on the current VM.
+                                let ups: Vec<InputEvent> = held
+                                    .iter()
+                                    .filter_map(|k| key_code(k))
+                                    .map(|c| InputEvent::new(EventType::KEY, c, 0))
+                                    .collect();
+                                let _ = targets[cur].emit(&ups);
+                                let _ = actions.send(action);
                                 // The batch that completed the combo belongs to no guest. The
                                 // physical releases that follow reach the new guest, where the
                                 // input core drops them because those keys are not down there.
@@ -292,6 +306,33 @@ mod tests {
         h.on_key("LEFTALT", true);
         assert_eq!(h.on_key("2", true), Some(HotkeyAction::Direct(1)));
         assert_eq!(h.on_key("7", true), None);
+    }
+
+    fn batch(keys: &[(&str, bool)]) -> Vec<(String, bool)> {
+        return keys.iter().map(|(k, p)| (k.to_string(), *p)).collect();
+    }
+
+    #[test]
+    fn combo_and_its_release_in_one_batch_fires_every_time() {
+        let mut h = m();
+        let tap = batch(&[
+            ("LEFTCTRL", true),
+            ("LEFTALT", true),
+            ("RIGHT", true),
+            ("RIGHT", false),
+            ("LEFTALT", false),
+            ("LEFTCTRL", false),
+        ]);
+        for _ in 0..3 {
+            let (action, held) = h.on_batch(&tap).expect("combo should fire");
+            assert_eq!(action, HotkeyAction::Next);
+            assert_eq!(held.len(), 3);
+            assert_eq!(
+                h.held().count(),
+                0,
+                "a release in the batch must be applied"
+            );
+        }
     }
 
     #[test]
