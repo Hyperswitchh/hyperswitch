@@ -9,7 +9,11 @@
      The qcow2 file is sparse, so it only uses the space Windows actually writes.
      The system disk is SATA and the network is e1000e because Windows has both drivers built
      in, so setup works without loading anything. After install, add the virtio drivers from
-     the virtio-win ISO and switch the disk and network to virtio for speed. -->
+     the virtio-win ISO. The network can then be switched to virtio. Do NOT switch the system
+     disk to virtio yet: Windows fell into automatic repair when that was tried right after
+     installing the drivers, because the storage driver was not yet a boot driver. Roll back to
+     SATA if that happens. The safe route is to add a spare virtio disk first, or run
+     `sc config viostor start= boot` in an admin prompt, then switch. -->
 <domain type="kvm">
   <name>hs-win11</name>
   <memory unit="GiB">4</memory>
@@ -62,6 +66,7 @@
     <graphics type="spice"><listen type="none"/><image compression="off"/></graphics>
     <video><model type="qxl" ram="65536" vram="65536" vgamem="16384" heads="1" primary="yes"/></video>
     <channel type="spicevmc"><target type="virtio" name="com.redhat.spice.0"/></channel>
+    <channel type="unix"><target type="virtio" name="org.qemu.guest_agent.0"/></channel>
     <input type="tablet" bus="usb"/>
 
     <!-- Permanently attached Hyperswitch virtual device. This exact form (grab="all",

@@ -116,18 +116,28 @@ Findings:
 
 Skipped by choice: the real keyboard test. The test udev rule `/etc/udev/rules.d/71-hyperswitch-test.rules` should be removed when no longer needed.
 
-## Phase 5: Windows guest on virtual graphics (in progress)
+## Phase 5: Windows guest on virtual graphics (done)
 
-Done so far:
-- `vm-templates/win11-virtual.xml` added: UEFI with Secure Boot, TPM 2.0 (swtpm), 4 GB RAM, 4 vCPUs, SPICE with QXL, SATA system disk and e1000e network (both inbox Windows drivers, so the installer needs no driver step), Windows ISO and virtio-win ISO as CD-ROMs, and the Hyperswitch evdev input. Placeholders `@DISK@`, `@WIN_ISO@`, `@VIRTIO_ISO@`. It validates against the libvirt schema.
-- `vm-templates/win11.xml` evdev inputs now use the form verified in Phase 4 (`grab="all"`, `repeat="on"`).
-- virtio-win 0.1.302 ISO (877 MB, fedorapeople.org) downloading to `~/hyperswitch-vms/`.
+Setup:
+- `vm-templates/win11-virtual.xml`: UEFI with Secure Boot, TPM 2.0 (swtpm), 4 GB RAM, 4 vCPUs, SPICE with QXL, SATA system disk, Windows ISO and virtio-win ISO as CD-ROMs, guest-agent channel, Hyperswitch evdev input. Validated against the libvirt schema.
+- Windows 11 (build 26300) installed on a 64 GB sparse qcow2 under `qemu:///session`. First-run setup finished with the optional offers declined. The Windows ISO was ejected after the first restart so the guest cannot fall back into Setup.
+- virtio-win 0.1.302 installed in the guest (drivers, QEMU guest agent, display and SPICE tools). The ISO download was truncated twice because my `curl ... | tail` hid curl's exit code. It was re-fetched with retries and verified by exact size.
 
-Waiting on: a Windows 11 x64 ISO supplied by the user (Microsoft's download link is per session, so it cannot be scripted).
+Findings:
+- Switching the system disk to virtio right after installing the drivers sent Windows into automatic repair (the storage driver was not yet a boot driver). Rolled back to SATA, which boots. The network is virtio. Needs `sc config viostor start= boot` or a spare virtio disk first. Not blocking.
+- A full Windows install plus first boot took about 20 GB of the host disk. Free space fell from 52 GB to about 24 GB.
+- `virsh shutdown` did not shut Windows down while it was doing first-boot background work (4 vCPUs busy). It worked once the guest was idle.
+- Startup race reproduced: `hyperswitchd` creates the virtual devices and starts guests about 30 ms later, before udev has made the `/dev/input/hyperswitch/...` symlink, so QEMU fails to open it and the daemon exits. Workaround used: `autostart = false` and start guests after the symlinks exist. Fix to build: wait for the symlinks before `boot_all`.
+- uaccess ACLs on a new input device can arrive after the daemon opens it ("permission denied"). Wait until the node is readable.
+- BUG FOUND AND FIXED: when a combo fired, the router dropped the rest of that input batch, including the combo key's release. The matcher kept the key "held" and ignored its next press as auto-repeat, so every second hotkey failed (22 of 42 switched) and the keys leaked to the guest as plain arrow keys. Fix: `HotkeyMatcher::on_batch` applies every event in the batch. A unit test and a hardware-test case (combo key press and release in one write) reproduce it, and fail on the old code.
 
-Next: create a 64 GB sparse qcow2 (disk has about 51 GB free, Windows will use roughly 25 GB), define the guest under `qemu:///session`, install Windows, install the virtio drivers and SPICE guest tools, then run the Phase 3 and 4 checks with Windows as one of the two guests.
+Gate (Alpine test guest and Windows 11, fixed daemon, fake keyboard, real libvirt and QEMU):
+- 20 round trips, each typing in the focused guest and switching with Ctrl+Alt+Right and Ctrl+Alt+Left: 42 of 42 switches registered, exactly as expected.
+- Alpine received exactly 20 `a` characters and none of the digits, with no stray arrow keys.
+- Windows' sign-in screen showed exactly 3 dots for 3 digits typed in an earlier run, and an earlier hotkey woke it from a black screen. In the final run Windows was already signed in, so its characters were not counted; routing is inferred from Alpine receiving none of them.
+- Switch time per hotkey, no display or audio hooks: min 219 us, median 1.1 ms, p95 1.4 ms, max 1.4 ms.
 
-Gate: switch between the Ubuntu host window and the Windows guest by hotkey, in both directions, repeatedly.
+Not done: the virtio system disk, auditing Windows' key count in the final run, and real display and audio hooks (Phase 6).
 
 ## Phase 6: Measure
 
