@@ -139,14 +139,36 @@ Gate (Alpine test guest and Windows 11, fixed daemon, fake keyboard, real libvir
 
 Not done: the virtio system disk, auditing Windows' key count in the final run, and real display and audio hooks (Phase 6).
 
-## Phase 6: Measure
+## Phase 6: Measure (done)
 
-Work:
-- Add timing around each step of `switch_index` (state check, input, blur, focus).
-- Run 200 switches. Record median, p95 and max.
-- Replace slow hooks (`sh`, `swaymsg`, `wpctl status | awk`) if they exceed the budget.
+Work done:
+- The switch engine now times each step (`StepTimes`: state check, input, blur hook, focus hook). The numbers are in `SwitchReport`, the CLI output and the daemon log. Tests added.
+- `scripts/bench-switch.py` sends N `next` requests over the daemon socket and prints median, p95 and max per step.
 
-Gate: results are written down. A switch that completes in under 2 seconds counts as a pass for this machine. Under 100 ms is the stretch goal.
+Setup: `hyperswitchd` against the real libvirt guests (Alpine and Windows 11 both running under `qemu:///session`), input devices empty so no input router, 200 switches per scenario. Machine under normal load (Windows guest using about 0.7 of a core plus the desktop, load average 6 to 13 on 12 threads), so these are not best-case numbers.
+
+| Scenario | Median | p95 | Max |
+|---|---|---|---|
+| S0 no hooks | 0.14 ms | 0.18 ms | 0.40 ms |
+| S1 two bare shell spawns (`true`) | 1.16 ms | 1.41 ms | 1.56 ms |
+| S2 real `audio.sh` on real PipeWire | 20.8 ms | 23.0 ms | 25.8 ms |
+| S3 `audio.sh` plus a display stand-in (`gdbus call`) | 25.1 ms | 28.8 ms | 41.2 ms |
+
+Per step in S2: state check 0.2 ms, input 0.00 ms, blur hook 10.2 ms, focus hook 10.3 ms. No switch went over the 100 ms budget.
+
+Where the time goes: libvirt's `state` call is about 0.15 ms and a shell spawn about 0.5 ms. Each `wpctl` process costs 8 to 9 ms by itself (PipeWire connection setup): `wpctl status` 9.5 ms, `wpctl set-mute <id>` 8.4 ms. `audio.sh` runs about two of them per hook, which is the whole cost.
+
+What is real and what is not:
+- Real: libvirt calls, guest state, shell hook spawn, `audio.sh` and `wpctl` against real PipeWire (two null sinks named `hs-test1` and `hs-win11`, created with `pw-cli`, since the guests have no audio devices).
+- Stand-in: the display hook. Sway is not installed and this laptop runs GNOME, so a `gdbus` call to the session bus stood in for `swaymsg`. A real `swaymsg` round trip should be similar, but it is unmeasured.
+- Not measured: the time from a key press to the guest's screen changing (needs frame timing from Looking Glass or SPICE), and input latency through the evdev path.
+
+Result: under 2 s (pass) and under 100 ms (stretch goal met for the hook-driven part of a switch on this machine).
+
+Options if a lower number is ever needed (not done, not needed now):
+- Cache the PipeWire node id per guest so `audio.sh` skips the `wpctl status` lookup. Saves about half the audio cost.
+- A native PipeWire client inside the daemon removes the per-switch process spawn and should bring the audio hooks under 1 ms.
+- Run the two hooks in parallel.
 
 ## Phase 7: Optional GPU passthrough experiment
 
