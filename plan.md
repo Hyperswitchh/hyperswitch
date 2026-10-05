@@ -87,7 +87,7 @@ Findings:
 
 Gate passed. The two guests are left running for Phase 4.
 
-## Phase 4: Real input routing (router verified, QEMU wiring and real keyboard pending)
+## Phase 4: Real input routing (router and guest wiring verified, real keyboard pending)
 
 Safety setup: a test-only udev rule (`/etc/udev/rules.d/71-hyperswitch-test.rules`) gives the user access to `/dev/uinput` and to devices named `hs-fake-*` or `hyperswitch-*`, and sets `LIBINPUT_IGNORE_DEVICE` so the GNOME desktop never types them. Remove it when Phase 4 is finished: `sudo rm /etc/udev/rules.d/71-hyperswitch-test.rules && sudo udevadm control --reload`.
 
@@ -102,9 +102,21 @@ Results:
 - Correction to the Phase 1 notes: the Linux input layer already drops a key-up (and repeat) for a key that is not down on a virtual device, so an earlier `KeySuppressor` was redundant. It was removed and the test still passes. The fix that matters is dropping the batch that completes the combo.
 - Finding: the distro rule `70-hyperswitch.rules` should also set `LIBINPUT_IGNORE_DEVICE` for `hyperswitch-*` devices.
 
+Guest wiring (done, with two Alpine guests under `qemu:///session`):
+- Each guest has `<input type='evdev'>` pointing at `/dev/input/hyperswitch/hyperswitch-<id>-0` with `grab='all'`, added with `virsh attach-device --config`. QEMU opened the devices (`input-linux` with `grab_all` and `repeat`).
+- The daemon created the virtual devices and the udev symlinks first, then booted the guests. Both started without errors.
+- A fake keyboard (scratch tool, not in the repo) typed into the system. Guest screens were read with `virsh screenshot` while `cat -v` ran in each guest.
+- Result: `aaa` reached only the focused guest 1. Ctrl+Alt+Right switched in 1.36 ms and `bbb` reached only guest 2. Ctrl+Alt+Left switched back in 1.34 ms and `ccc` reached guest 1. No `^` characters appeared, so no modifier stuck. Display and audio hooks were empty in this run.
+
+Findings:
+- `virt-install` ejects the install ISO after the first boot, so a restarted guest says "No bootable device". Re-insert it with `virsh change-media <guest> hda <iso> --insert --config --live`.
+- Guests with an `evdev` input cannot start unless the daemon has already created the symlinks. The daemon creates the devices before it starts guests and it worked here, but it does not wait for udev. A short wait for the symlinks before `boot_all` would remove a possible race.
+- `virsh send-key` presses keys together, so doubled letters are dropped. Send keys one at a time.
+- Typing latency was not measured.
+
 Still to do for this phase:
-- Wire the guests to the virtual devices with libvirt `<input type="evdev">`, using the udev symlinks from the distro rule. The daemon already creates the devices before it starts guests.
-- Check typing reaches only the focused guest with a real guest, then repeat with the real keyboard behind a watchdog.
+- Repeat with your real keyboard behind a watchdog. This is the risky step and needs your go-ahead.
+- Remove the test udev rule when Phase 4 is finished.
 
 ## Phase 5: Windows guest on virtual graphics
 
